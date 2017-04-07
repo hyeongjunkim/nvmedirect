@@ -30,19 +30,15 @@ int nvmed_submit_sync_cmd(struct nvme_dev *dev, struct nvme_command* cmd,
 		void* buffer, unsigned bufflen, u32 *result) {
 	int ret = 0;
 
-	if(nvmed_submit_cmd) {
-		ret = nvmed_submit_cmd(dev, cmd, result);
-	}
-	else {
-		ret = nvmed_submit_cmd_mq(DEV_TO_ADMINQ(dev), cmd, buffer, bufflen);
-	}
+	ret = nvmed_submit_cmd(DEV_TO_ADMINQ(dev), cmd, buffer, bufflen);
+
 	return ret;
 }
 
 static int nvmed_set_features(NVMED_DEV_ENTRY *dev_entry, unsigned fid, unsigned dword11,
 					dma_addr_t dma_addr, u32 *result)
 {
-	return NVMED_SET_FEATURES(dev_entry, fid, dword11, dma_addr, result);
+	return nvmed_set_features_fn(&dev_entry->dev->ctrl, fid, dword11, dma_addr, result);
 }
 
 static int set_queue_count(NVMED_DEV_ENTRY *dev_entry, int count)
@@ -197,7 +193,8 @@ static NVMED_USER_QUOTA_ENTRY* nvmed_get_user_quota(NVMED_NS_ENTRY *ns_entry, ku
  * Copy NVMe device information to user
  */
 static int nvmed_get_device_info(NVMED_NS_ENTRY *ns_entry, 
-								NVMED_DEVICE_INFO __user *u_dev_info) {
+		NVMED_DEVICE_INFO __user *u_dev_info) {
+	unsigned long ret;
 	struct nvme_ns *ns = ns_entry->ns;
 	struct nvme_dev *dev = NS_ENTRY_TO_DEV(ns_entry);
 	struct nvmed_device_info dev_info;
@@ -218,7 +215,7 @@ static int nvmed_get_device_info(NVMED_NS_ENTRY *ns_entry,
 	dev_info.nr_sects = ns_entry->nr_sects;
 	dev_info.part_no = ns_entry->partno;
 
-	copy_to_user(u_dev_info, &dev_info, sizeof(dev_info));
+	ret = copy_to_user(u_dev_info, &dev_info, sizeof(dev_info));
 
 	return NVMED_SUCCESS;
 }
@@ -300,13 +297,14 @@ static int nvmed_get_buffer_addr(NVMED_NS_ENTRY *ns_entry, NVMED_BUF* __user *__
 	int i;
 	__u64* pfnList;
 	struct page *page_info;
-	
+	unsigned long ret;
+
 	pgd_t *pgd;
 	pte_t *ptep, pte;
 	pud_t *pud;
 	pmd_t *pmd;
 
-	copy_from_user(&u_buf, __buf, sizeof(u_buf));
+	ret = copy_from_user(&u_buf, __buf, sizeof(u_buf));
 
 	start_addr = (unsigned long)u_buf.addr;
 
@@ -354,7 +352,7 @@ static int nvmed_get_buffer_addr(NVMED_NS_ENTRY *ns_entry, NVMED_BUF* __user *__
 	}
 	up_read(&mm->mmap_sem);
 	
-	copy_to_user(u_buf.pfnList, pfnList, sizeof(__u64)*u_buf.size);
+	ret = copy_to_user(u_buf.pfnList, pfnList, sizeof(__u64)*u_buf.size);
 
 	kfree(pfnList);
 
@@ -442,7 +440,7 @@ static int nvmed_queue_create(NVMED_NS_ENTRY *ns_entry, unsigned int __user *__q
 	size_t size;
 	char dentry_buf[4];
 	int qid;
-
+	unsigned long ret;
 	int result;
 
 	spin_lock(&dev_entry->ctrl_lock);
@@ -463,6 +461,7 @@ static int nvmed_queue_create(NVMED_NS_ENTRY *ns_entry, unsigned int __user *__q
 	//set_queue_count
 	result = set_queue_count(dev_entry, queue_count);
 	if(result < queue_count) {
+		pr_err("%s: %d %d %d\n", __func__, dev->queue_count, queue_count, result);
 		spin_unlock(&dev_entry->ctrl_lock);
 		return -NVMED_EXCEEDLIMIT;
 	}
@@ -504,7 +503,7 @@ static int nvmed_queue_create(NVMED_NS_ENTRY *ns_entry, unsigned int __user *__q
 
 	spin_unlock(&dev_entry->ctrl_lock);
 
-	copy_to_user(__qid, &qid, sizeof(qid));
+	ret = copy_to_user(__qid, &qid, sizeof(qid));
 
 	return NVMED_SUCCESS;
 
@@ -539,8 +538,9 @@ static int nvmed_queue_delete(NVMED_NS_ENTRY *ns_entry, unsigned int __user *__q
 	NVMED_QUEUE_ENTRY *queue;
 	NVMED_DEV_ENTRY *dev_entry; 	
 	unsigned int qid;
+	unsigned long ret;
 
-	copy_from_user(&qid, __qid, sizeof(unsigned int));
+	ret = copy_from_user(&qid, __qid, sizeof(unsigned int));
 
 	//get Queue
 	queue = nvmed_get_queue_from_qid(ns_entry, qid);
@@ -586,8 +586,9 @@ static int nvmed_get_user(NVMED_NS_ENTRY *ns_entry, NVMED_USER_QUOTA __user *__q
 	NVMED_USER_QUOTA quota;
 	NVMED_USER_QUOTA_ENTRY *quota_entry;
 	kuid_t uid;
+	unsigned long ret;
 
-	copy_from_user(&quota, __quota, sizeof(*__quota));
+	ret = copy_from_user(&quota, __quota, sizeof(*__quota));
 	
 	uid.val = quota.uid;
 	quota_entry = nvmed_get_user_quota(ns_entry, uid);
@@ -597,7 +598,7 @@ static int nvmed_get_user(NVMED_NS_ENTRY *ns_entry, NVMED_USER_QUOTA __user *__q
 	quota.queue_max = quota_entry->queue_max;
 	quota.queue_used = quota_entry->queue_used;
 
-	copy_to_user(__quota , &quota, sizeof(quota));
+	ret = copy_to_user(__quota , &quota, sizeof(quota));
 
 	return NVMED_SUCCESS;
 }
@@ -606,10 +607,11 @@ static int nvmed_set_user(NVMED_NS_ENTRY *ns_entry, NVMED_USER_QUOTA __user *__q
 	NVMED_USER_QUOTA quota;
 	NVMED_USER_QUOTA_ENTRY *quota_entry;
 	kuid_t uid;
+	unsigned long ret;
 	
 	if(current_uid().val != 0) return -EPERM;
 
-	copy_from_user(&quota, __quota, sizeof(*__quota));
+	ret = copy_from_user(&quota, __quota, sizeof(*__quota));
 	uid.val = quota.uid;
 
 	nvmed_set_user_quota(ns_entry, uid, quota.queue_max);
@@ -627,7 +629,7 @@ static int nvmed_set_user(NVMED_NS_ENTRY *ns_entry, NVMED_USER_QUOTA __user *__q
 		quota.queue_max = quota_entry->queue_max;
 		quota.queue_used = quota_entry->queue_used;
 	}
-	copy_to_user(__quota , &quota, sizeof(quota));
+	ret = copy_to_user(__quota , &quota, sizeof(quota));
 
 	return NVMED_SUCCESS;
 }
@@ -696,15 +698,9 @@ static NVMED_RESULT nvmed_scan_device(void) {
 		return -NVMED_FAULT;
 	}
 
-	ret = kallsyms_lookup_name("nvme_submit_admin_cmd");
+	ret = kallsyms_lookup_name("nvme_submit_sync_cmd");
 	if(ret) {
 		nvmed_submit_cmd = (typeof(nvmed_submit_cmd))(uintptr_t)ret;
-	}
-	else {
-		ret = kallsyms_lookup_name("nvme_submit_sync_cmd");
-		if(ret) {
-			nvmed_submit_cmd_mq = (typeof(nvmed_submit_cmd_mq))(uintptr_t)ret;
-		}
 	}
 	
 	if(!ret) {

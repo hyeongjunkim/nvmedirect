@@ -1,6 +1,6 @@
 CC := gcc
 
-CFLAGS := -Wall -fPIC
+CFLAGS := -Wall -fPIC 
 LDFLAGS := -pthread -shared
 
 SHARED_LIB = libnvmed.so
@@ -14,8 +14,8 @@ $(SHARED_LIB): $(SHARED_OBJS)
 	$(CC) $(CFLAGS) $(SHARED_OBJS) -o $(SHARED_LIB) $(LDFLAGS)
 
 install: $(SHARED_LIB)
-	install -m 644 -o root -g root $(INSTALL_HEADERS) /usr/local/include/
-	install -m 644 -o root -g root $(SHARED_LIB) /usr/local/lib
+	install -m 644 -o root -g root $(INSTALL_HEADERS) /lib64
+	install -m 644 -o root -g root $(SHARED_LIB) /lib64
 	ldconfig 
 
 clean:
