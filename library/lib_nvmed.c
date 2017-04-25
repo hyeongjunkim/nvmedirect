@@ -268,9 +268,17 @@ void nvmed_io_polling(NVMED_HANDLE* nvmed_handle, u16 target_id) {
 	while(1) {
 		head = nvmed_queue->cq_head;
 		phase = nvmed_queue->cq_phase;
-		iod = nvmed_queue->iod_arr + target_id;
-		if(iod->status == IO_COMPLETE) {
-			break;
+		if(target_id != (u16)-1) {
+			iod = nvmed_queue->iod_arr + target_id;
+			if(iod->status == IO_COMPLETE) {
+				break;
+			}
+		}
+		else {
+			if(iod != NULL && 
+					iod->context != NULL && 
+					iod->context->status == AIO_COMPLETE)
+				break;
 		}
 		cqe = (volatile struct nvme_completion *)&nvmed_queue->cqes[head];
 		for (;;) {
@@ -1323,6 +1331,8 @@ ssize_t nvmed_io_rw(NVMED_HANDLE* nvmed_handle, u8 opcode, void* buf,
 	u64 prp1, prp2;
 	void* next_buf = buf;
 	void* prp2_addr;
+	bool io_splited_and_sync = false;
+	u32 flags = nvmed_handle->flags;
 
 	// DIRECT - No copy - must do sync
 	// Buffered - Copy to buffer
@@ -1355,6 +1365,15 @@ ssize_t nvmed_io_rw(NVMED_HANDLE* nvmed_handle, u8 opcode, void* buf,
 	if(context != NULL && context->prpList != NULL)
 		paBase = context->prpList;
 
+	if(remain > nvmed->dev_info->max_hw_sectors * 512 && 
+			FLAG_ISSET(nvmed_handle, HANDLE_SYNC_IO)) {
+		io_splited_and_sync = true;
+		flags &= ~HANDLE_SYNC_IO;
+
+		if(context == NULL)
+			context = calloc(1, sizeof(NVMED_AIO_CTX));
+	}
+
 	// if Buf aligned -> Fn ==> non-cp fn
 	// Not aligned -> Fn ==> mem_cp fn
 	while(remain > 0) {
@@ -1366,7 +1385,7 @@ ssize_t nvmed_io_rw(NVMED_HANDLE* nvmed_handle, u8 opcode, void* buf,
 		make_prp_list(nvmed_handle, next_buf, total_io , io_size, 
 					paBase, &prp1, &prp2, &prp2_addr);
 		io = nvmed_io(nvmed_handle, opcode, prp1, prp2, prp2_addr, NULL, 
-				io_lba, io_size, nvmed_handle->flags, context);
+				io_lba, io_size, flags, context);
 		
 		if(io <= 0) break;
 
@@ -1375,6 +1394,18 @@ ssize_t nvmed_io_rw(NVMED_HANDLE* nvmed_handle, u8 opcode, void* buf,
 		io_lba += io;
 		nvmed_handle->offset += io;
 		next_buf += io;
+		if(io_splited_and_sync && 
+				(nvmed_handle->prpBuf_curr == 0 || nvmed_queue->iod_pos == 0)) {
+			while(context->status != AIO_COMPLETE) {
+				nvmed_io_polling(nvmed_handle, -1);
+			}
+		}
+	}
+
+	if(io_splited_and_sync) {
+		while(context->status != AIO_COMPLETE) {
+			nvmed_io_polling(nvmed_handle, -1);
+		}
 	}
 
 	return total_io;
