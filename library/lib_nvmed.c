@@ -1300,16 +1300,16 @@ bool nvmed_rw_verify_area(NVMED_HANDLE* nvmed_handle,
 		unsigned long __start_lba, unsigned int len) {
 	NVMED *nvmed = HtoD(nvmed_handle);
 	NVMED_DEVICE_INFO *dev_info = nvmed->dev_info;
+	unsigned long nr_sects = dev_info->nr_sects << dev_info->lba_shift;
 	unsigned long start_lba = nvmed->dev_info->start_sect + __start_lba;
-
+	
 	if(start_lba < dev_info->start_sect)
 		return false;
 
-	if((dev_info->start_sect + dev_info->nr_sects) < start_lba)
+	if((dev_info->start_sect + nr_sects) < start_lba)
 		return false;
-
-	if((dev_info->start_sect + dev_info->nr_sects)
-			< (start_lba + len))
+	
+	if((dev_info->start_sect + nr_sects) < (start_lba + len))
 		return false;
 
 	return true;
